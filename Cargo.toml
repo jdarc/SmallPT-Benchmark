@@ -1,0 +1,13 @@
+[package]
+name = "smallpt"
+version = "0.1.0"
+authors = ["Jean d'Arc <darc.void@googlemail.com>"]
+edition = "2018"
+
+[[bin]]
+name = "smallpt"
+path = "smallpt.rs"
+
+[dependencies]
+rand = "0.7.3"
+rayon = "1.5.0"

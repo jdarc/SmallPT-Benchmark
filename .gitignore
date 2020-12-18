@@ -1,0 +1,7 @@
+.idea/
+target
+*.ppm
+*.class
+*.jar
+*.iml
+smallpt
