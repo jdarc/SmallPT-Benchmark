@@ -65,12 +65,14 @@ Sphere spheres[] = {
 
 inline double clamp(double x) { return x < 0 ? 0 : x > 1 ? 1 : x; }
 
-inline int toInt(double x) { return (int)(pow(clamp(x), 1 / 2.2) * 255 + .5); }
+inline int toInt(double x) { return (int)(pow(clamp(x), 1.0 / 2.2) * 255.0 + 0.5); }
 
 inline bool intersect(const Ray &r, double &t, int &id) {
-    double n = sizeof(spheres) / (double)sizeof(Sphere), d, inf = t = 1e20;
+    double n = sizeof(spheres) / sizeof(Sphere);
+    double d;
+    double inf = t = 1e20;
     for (int i = int(n); i--;)
-        if ((d = spheres[i].intersect(r)) > 0 && d < t) {
+        if ((d = spheres[i].intersect(r)) > 0.0 && d < t) {
             t = d;
             id = i;
         }
@@ -81,32 +83,54 @@ Vec radiance(const Ray &r, int depth, unsigned short *Xi) {
     double t;
     int id = 0;
     if (!intersect(r, t, id)) return Vec();
+
     const Sphere &obj = spheres[id];
-    Vec x = r.o + r.d * t, n = (x - obj.p).norm(), nl = n.dot(r.d) < 0 ? n : n * -1, f = obj.c;
-    double p = f.x > f.y && f.x > f.z ? f.x : f.y > f.z ? f.y : f.z;
+    Vec x = r.o + r.d * t;
+    Vec n = (x - obj.p).norm();
+    Vec nl = n.dot(r.d) < 0.0 ? n : n * -1.0;
+
+    Vec f = obj.c;
     if (++depth > 5) {
-        if (erand48(Xi) < p) f = f * (1 / p); else return obj.e;
+        double p = f.x > f.y && f.x > f.z ? f.x : f.y > f.z ? f.y : f.z;
+        if (depth < 256 && erand48(Xi) < p) f = f * (1 / p); else return obj.e;
     }
 
     if (obj.refl == DIFF) {
-        double r2 = erand48(Xi), r2s = sqrt(r2);
-        double r1 = 2 * M_PI * erand48(Xi);
-        Vec w = nl, u = ((fabs(w.x) > .1 ? Vec(0, 1) : Vec(1)) % w).norm(), v = w % u;
+        double r2 = erand48(Xi);
+        double r2s = sqrt(r2);
+        double r1 = 2.0 * M_PI * erand48(Xi);
+        Vec w = nl;
+        Vec u = ((fabs(w.x) > 0.1 ? Vec(0, 1) : Vec(1)) % w).norm();
+        Vec v = w % u;
         Vec d = (u * cos(r1) * r2s + v * sin(r1) * r2s + w * sqrt(1 - r2)).norm();
         return obj.e + f.mul(radiance(Ray(x, d), depth, Xi));
-    } else if (obj.refl == SPEC) {
+    }
+
+    if (obj.refl == SPEC) {
         return obj.e + f.mul(radiance(Ray(x, r.d - n * 2 * n.dot(r.d)), depth, Xi));
     }
 
-    Ray reflRay(x, r.d - n * 2 * n.dot(r.d));
-    bool into = n.dot(nl) > 0;
-    double nc = 1, nt = 1.5, nnt = into ? nc / nt : nt / nc, ddn = r.d.dot(nl), cos2t;
-    if ((cos2t = 1 - nnt * nnt * (1 - ddn * ddn)) < 0) return obj.e + f.mul(radiance(reflRay, depth, Xi));
+    Ray reflRay(x, r.d - n * 2.0 * n.dot(r.d));
+    bool into = n.dot(nl) > 0.0;
+    double nc = 1.0;
+    double nt = 1.5;
+    double nnt = into ? nc / nt : nt / nc;
+    double ddn = r.d.dot(nl);
+    double cos2t = 1.0 - nnt * nnt * (1.0 - ddn * ddn);
+    if (cos2t < 0.0) {
+        return obj.e + f.mul(radiance(reflRay, depth, Xi));
+    }
 
-    Vec tdir = (r.d * nnt - n * ((into ? 1 : -1) * (ddn * nnt + sqrt(cos2t)))).norm();
-    double a = nt - nc, b = nt + nc, R0 = a * a / (b * b), c = 1 - (into ? -ddn : tdir.dot(n));
-    double Re = R0 + (1 - R0) * c * c * c * c * c, Tr = 1 - Re, P = .25 + .5 * Re, RP = Re / P, TP = Tr / (1 - P);
-
+    Vec tdir = (r.d * nnt - n * ((into ? 1.0 : -1.0) * (ddn * nnt + sqrt(cos2t)))).norm();
+    double a = nt - nc;
+    double b = nt + nc;
+    double R0 = a * a / (b * b);
+    double c = 1.0 - (into ? -ddn : tdir.dot(n));
+    double Re = R0 + (1.0 - R0) * pow(c, 5);
+    double Tr = 1.0 - Re;
+    double P = 0.25 + 0.5 * Re;
+    double RP = Re / P;
+    double TP = Tr / (1.0 - P);
     return obj.e + f.mul(depth > 2 ? (erand48(Xi) < P ?
         radiance(reflRay, depth, Xi) * RP : radiance(Ray(x, tdir), depth, Xi) * TP) :
         radiance(reflRay, depth, Xi) * Re + radiance(Ray(x, tdir), depth, Xi) * Tr);
@@ -123,8 +147,10 @@ int main(int argc, char *argv[]) {
     for (int y = 0; y < h; y++) {
         fprintf(stderr, "\rRendering (%d spp) %5.2f%%", samples * 4, 100. * y / (h - 1));
         for (unsigned short x = 0, Xi[3] = {0, 0, (unsigned short) (y * y * y)}; x < w; x++) {
-            for (int sy = 0, i = (h - y - 1) * w + x; sy < 2; sy++) {
-                for (int sx = 0; sx < 2; sx++, r = Vec()) {
+            int i = (h - y - 1) * w + x;
+            for (int sy = 0; sy < 2; sy++) {
+                for (int sx = 0; sx < 2; sx++) {
+                    Vec r = Vec();
                     for (int s = 0; s < samples; s++) {
                         double r1 = 2 * erand48(Xi), dx = r1 < 1 ? sqrt(r1) - 1 : 1 - sqrt(2 - r1);
                         double r2 = 2 * erand48(Xi), dy = r2 < 1 ? sqrt(r2) - 1 : 1 - sqrt(2 - r2);

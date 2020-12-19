@@ -11,11 +11,13 @@ import static java.lang.Math.abs;
 import static java.lang.Math.ceil;
 import static java.lang.Math.cos;
 import static java.lang.Math.max;
+import static java.lang.Math.pow;
 import static java.lang.Math.sin;
 import static java.lang.Math.sqrt;
+import static java.util.concurrent.Executors.callable;
 import static java.util.stream.IntStream.range;
 
-final class SmallPT {
+class SmallPT {
     private static final int WIDTH = 1024;
     private static final int HEIGHT = 768;
 
@@ -31,7 +33,7 @@ final class SmallPT {
         new Sphere(600.0, new Vec3(50.0, 681.33, 81.6), new Vec3(12.0, 12.0, 12.0), Vec3.ZERO, ReflectanceType.DIFFUSE)
     };
 
-    private Vec3 radiance(final Ray ray, int depth) {
+    private IntersectResult intersect(Ray ray) {
         Sphere obj = null;
         var nearest = Double.POSITIVE_INFINITY;
         for (var sphere : spheres) {
@@ -41,22 +43,25 @@ final class SmallPT {
                 nearest = dist;
             }
         }
+        return new IntersectResult(obj, nearest);
+    }
 
-        if (obj == null) {
+    private Vec3 radiance(Ray ray, int depth) {
+        var result = intersect(ray);
+
+        var obj = result.obj;
+        if (result.obj == null) {
             return Vec3.ZERO;
         }
 
-        var col = obj.color;
-        var x = ray.origin.plus(ray.direction.times(nearest));
+        var x = ray.origin.plus(ray.direction.times(result.distance));
         var n = Vec3.normalize(x.minus(obj.position));
         var nl = Vec3.dot(n, ray.direction) < 0.0 ? n : n.times(-1.0);
+
+        var f = obj.color;
         if (++depth > 5) {
-            var p = max(col.x, max(col.y, col.z));
-            if (rnd() < p) {
-                col = col.times(1.0 / p);
-            } else {
-                return obj.emission;
-            }
+            var p = max(f.x, max(f.y, f.z));
+            if (depth < 256 && rnd() < p) f = f.times(1.0 / p); else return obj.emission;
         }
 
         switch (obj.type) {
@@ -65,38 +70,36 @@ final class SmallPT {
                 var phi = 2.0 * Math.PI * rnd();
                 var u = Vec3.normalize(abs(nl.x) > 0.1 ? new Vec3(-nl.z, 0.0, nl.x) : new Vec3(0.0, -nl.z, nl.y));
                 var d = u.times(cos(phi)).plus(Vec3.cross(nl, u).times(sin(phi))).times(sqrt(r)).plus(nl.times(sqrt(1.0 - r)));
-                return obj.emission.plus(col.times(radiance(new Ray(x, d), depth)));
+                return obj.emission.plus(f.times(radiance(new Ray(x, d), depth)));
             case MIRROR:
-                return obj.emission.plus(col.times(radiance(new Ray(x, Vec3.reflect(ray.direction, n)), depth)));
+                return obj.emission.plus(f.times(radiance(new Ray(x, Vec3.reflect(ray.direction, n)), depth)));
             default:
-                var reflected = new Ray(x, ray.direction.minus(n.times(2.0 * Vec3.dot(n, ray.direction))));
                 var into = Vec3.dot(n, nl) > 0.0;
                 var nc = 1.0;
                 var nt = 1.5;
                 var nnt = into ? nc / nt : nt / nc;
                 var ddn = Vec3.dot(ray.direction, nl);
                 var cos2t = 1.0 - nnt * nnt * (1.0 - ddn * ddn);
+                Vec3 v;
                 if (cos2t < 0.0) {
-                    return obj.emission.plus(col.times(radiance(reflected, depth)));
+                    v = radiance(new Ray(x, Vec3.reflect(ray.direction, n)), depth);
                 } else {
-                    var tdir = Vec3.normalize(ray.direction.times(nnt).minus(n.times((into ? 1.0 : -1.0) * (ddn * nnt + Math.sqrt(cos2t)))));
-                    var R0 = Math.pow(nt - nc, 2) / Math.pow(nt + nc, 2);
-                    var c = 1.0 - (into ? -ddn : Vec3.dot(tdir, n));
-                    var Re = R0 + (1.0 - R0) * c * c * c * c * c;
-                    var Tr = 1.0 - Re;
-                    var P = 0.25 + 0.5 * Re;
+                    var refract = Vec3.refract(ray.direction, nl, nnt);
+                    var r0 = Math.pow((nt - nc) / (nt + nc), 2);
+                    var re = r0 + (1.0 - r0) * pow(1.0 - (into ? -ddn : Vec3.dot(refract, n)), 5);
+                    var tr = 1.0 - re;
                     if (depth > 2) {
-                        Vec3 v;
-                        if (Math.random() < P) {
-                            v = radiance(reflected, depth).times(Re / P);
+                        var P = 0.25 + 0.5 * re;
+                        if (rnd() < P) {
+                            v = radiance(new Ray(x, Vec3.reflect(ray.direction, n)), depth).times(re / P);
                         } else {
-                            v = radiance(new Ray(x, tdir), depth).times(Tr / (1.0 - P));
+                            v = radiance(new Ray(x, refract), depth).times(tr / (1.0 - P));
                         }
-                        return obj.emission.plus(col.times(v));
+                    } else {
+                        v = radiance(new Ray(x, Vec3.reflect(ray.direction, n)), depth).times(re).plus(radiance(new Ray(x, refract), depth).times(tr));
                     }
-                    var rad = col.times(radiance(reflected, depth).times(Re).plus(radiance(new Ray(x, tdir), depth).times(Tr)));
-                    return obj.emission.plus(rad);
                 }
+                return obj.emission.plus(f.times(v));
         }
     }
 
@@ -107,7 +110,7 @@ final class SmallPT {
 
         var pixels = new Vec3[WIDTH * HEIGHT];
         Arrays.fill(pixels, Vec3.ZERO);
-        ForkJoinPool.commonPool().invokeAll(range(0, HEIGHT).mapToObj(y -> Executors.callable(() -> {
+        ForkJoinPool.commonPool().invokeAll(range(0, HEIGHT).mapToObj(y -> callable(() -> {
             System.out.printf("\rRendering (%d spp) %5.2f%%", samples * 4, 100.0 * y / (HEIGHT - 1));
             for (var x = 0; x < WIDTH; ++x) {
                 var acc = Vec3.ZERO;
@@ -137,13 +140,13 @@ final class SmallPT {
         writeImage(pixels);
     }
 
-    enum ReflectanceType {
+    private enum ReflectanceType {
         DIFFUSE,
         MIRROR,
         GLASS
     }
 
-    static class Vec3 {
+    private static class Vec3 {
         final static Vec3 ZERO = new Vec3(0.0, 0.0, 0.0);
 
         final double x;
@@ -187,9 +190,14 @@ final class SmallPT {
         static Vec3 reflect(Vec3 v, Vec3 n) {
             return v.minus(n.times(2.0 * dot(v, n)));
         }
+
+        static Vec3 refract(Vec3 i, Vec3 n, double eta) {
+            var k = 1.0 - eta * eta * (1.0 - dot(n, i) * dot(n, i));
+            return k < 0.0 ? Vec3.ZERO : i.times(eta).minus(n.times(eta * dot(n, i) + sqrt(k)));
+        }
     }
 
-    static class Ray {
+    private static class Ray {
         final Vec3 origin;
         final Vec3 direction;
 
@@ -199,7 +207,7 @@ final class SmallPT {
         }
     }
 
-    static class Sphere {
+    private static class Sphere {
         private static final double EPSILON = 0.0001;
 
         final double radius;
@@ -220,17 +228,21 @@ final class SmallPT {
             var op = position.minus(r.origin);
             var b = Vec3.dot(op, r.direction);
             var det = b * b - Vec3.dot(op, op) + radius * radius;
-            if (det < 0.0) {
-                return 0.0;
-            }
+            if (det < 0.0) return 0.0;
             det = sqrt(det);
-            if (b - det > EPSILON) {
-                return b - det;
-            }
-            if (b + det > EPSILON) {
-                return b + det;
-            }
+            if (b - det > EPSILON) return b - det;
+            if (b + det > EPSILON) return b + det;
             return 0.0;
+        }
+    }
+
+    private static class IntersectResult {
+        final Sphere obj;
+        final double distance;
+
+        IntersectResult(Sphere obj, double distance) {
+            this.obj = obj;
+            this.distance = distance;
         }
     }
 

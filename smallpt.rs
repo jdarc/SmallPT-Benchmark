@@ -56,6 +56,16 @@ impl Vector3 {
 
     #[inline]
     fn reflect(l: Vector3, n: Vector3) -> Vector3 { l - n * 2.0 * Vector3::dot(l, n) }
+
+    #[inline]
+    fn refract(i: Vector3, n: Vector3, eta: f64) -> Vector3 {
+        let k = 1.0 - eta * eta * (1.0 - Vector3::dot(n, i) * Vector3::dot(n, i));
+        return if k < 0.0 {
+            Vector3::zero()
+        } else {
+            i * eta - (n * (eta * Vector3::dot(n, i) + k.sqrt()))
+        };
+    }
 }
 
 impl Neg for Vector3 {
@@ -154,24 +164,24 @@ fn mirror(point: Vector3, normal: Vector3, direction: Vector3) -> Ray {
     Ray::new(point, Vector3::reflect(direction, normal))
 }
 
-fn radiance(ray: &Ray, spheres: &[Sphere], mut depth: i32) -> Vector3 {
+fn radiance(ray: &Ray, spheres: &[Sphere], depth: i32) -> Vector3 {
     let (index, nearest) = intersect(ray, spheres);
     return if nearest < f64::INFINITY {
         let obj = &spheres[index];
         let x = ray.origin + ray.direction * nearest;
         let n = Vector3::normalize(x - obj.position);
         let nl = if Vector3::dot(n, ray.direction) < 0.0 { n } else { -n };
+
         let mut f = obj.color;
-        depth = depth + 1;
-        if depth > 5 {
+        if depth > 4 {
             let p = f.x.max(f.y.max(f.z));
-            if rand::random::<f64>() < p { f = f / p; } else { return obj.emission; }
+            if depth < 256 && rand::random::<f64>() < p { f = f / p; } else { return obj.emission; }
         }
+
         obj.emission + f * match obj.refl {
-            ReflectanceType::Diffuse => radiance(&diffuse(x, nl), spheres, depth),
-            ReflectanceType::Mirror => radiance(&mirror(x, n, ray.direction), spheres, depth),
+            ReflectanceType::Diffuse => radiance(&diffuse(x, nl), spheres, depth + 1),
+            ReflectanceType::Mirror => radiance(&mirror(x, n, ray.direction), spheres, depth + 1),
             _ => {
-                let reflected = Ray::new(x, ray.direction - n * 2.0 * Vector3::dot(n, ray.direction));
                 let into = Vector3::dot(n, nl) > 0.0;
                 let nc = 1.0;
                 let nt = 1.5;
@@ -179,22 +189,25 @@ fn radiance(ray: &Ray, spheres: &[Sphere], mut depth: i32) -> Vector3 {
                 let ddn = Vector3::dot(ray.direction, nl);
                 let cos2t = 1.0 - nnt * nnt * (1.0 - ddn * ddn);
                 if cos2t < 0.0 {
-                    radiance(&reflected, spheres, depth)
+                    let reflected = Ray::new(x, Vector3::reflect(ray.direction, n));
+                    radiance(&reflected, spheres, depth + 1)
                 } else {
-                    let t_dir = Vector3::normalize(ray.direction * nnt - n * (if into { 1.0 } else { -1.0 }) * (ddn * nnt + cos2t.sqrt()));
+                    let t_dir = Vector3::refract(ray.direction, nl , nnt);
                     let r0 = (nt - nc).powi(2) / (nt + nc).powi(2);
-                    let c = 1.0 - (if into { -ddn } else { Vector3::dot(t_dir, n) });
-                    let re = r0 + (1.0 - r0) * c * c * c * c * c;
+                    let re = r0 + (1.0 - r0) * (1.0 - (if into { -ddn } else { Vector3::dot(t_dir, n) })).powi(5);
                     let tr = 1.0 - re;
-                    let p = 0.25 + 0.5 * re;
-                    if depth > 2 {
+                    if depth > 1 {
+                        let p = 0.25 + 0.5 * re;
                         if rand::random::<f64>() < p {
-                            radiance(&reflected, spheres, depth) * re / p
+                            let reflected = Ray::new(x, Vector3::reflect(ray.direction, n));
+                            radiance(&reflected, spheres, depth + 1) * re / p
                         } else {
-                            radiance(&Ray::new(x, t_dir), spheres, depth) * tr / (1.0 - p)
+                            radiance(&Ray::new(x, t_dir), spheres, depth + 1) * tr / (1.0 - p)
                         }
                     } else {
-                        radiance(&reflected, spheres, depth) * re + radiance(&Ray::new(x, t_dir), spheres, depth) * tr
+                        let reflected = Ray::new(x, Vector3::reflect(ray.direction, n));
+                        radiance(&reflected, spheres, depth + 1) * re +
+                        radiance(&Ray::new(x, t_dir), spheres, depth + 1) * tr
                     }
                 }
             }

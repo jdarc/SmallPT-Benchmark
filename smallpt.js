@@ -64,7 +64,11 @@ class Vec3 {
     static dot = (a, b) => a.x * b.x + a.y * b.y + a.z * b.z
     static cross = (a, b, dst = Vec3.POOL.next()) => dst.set(a.y * b.z - a.z * b.y, a.z * b.x - a.x * b.z, a.x * b.y - a.y * b.x)
     static normalize = (v, dst = Vec3.POOL.next()) => v.scale(1.0 / v.length(), dst);
-
+    static reflect = (v, n, dst = Vec3.POOL.next()) => v.minus(n.scale(2.0 * Vec3.dot(v, n)), dst);
+    static refract = (i, n, eta, dst = Vec3.POOL.next()) => {
+        const k = 1.0 - eta * eta * (1.0 - Vec3.dot(n, i) * Vec3.dot(n, i));
+        return k < 0.0 ? Vec3.ZERO : i.scale(eta).minus(n.scale(eta * Vec3.dot(n, i) + Math.sqrt(k)), dst);
+    }
 }
 
 class Ray {
@@ -181,7 +185,7 @@ const workerProgram = () => {
         let f = hit.color;
         const p = Math.max(f.x, Math.max(f.y, f.z));
         if (++depth > 5) {
-            if (Math.random() < p) {
+            if (depth < 256 && Math.random() < p) {
                 f = f.scale(1.0 / p);
             } else {
                 return hit.emission;
@@ -199,11 +203,9 @@ const workerProgram = () => {
         }
 
         if (hit.type === ReflectanceType.MIRROR) {
-            const d = ray.direction.minus(n.scale(2.0 * Vec3.dot(n, ray.direction)));
-            return hit.emission.plus(f.times(radiance(Ray.build(x, d), spheres, depth)));
+            return hit.emission.plus(f.times(radiance(Ray.build(x, Vec3.reflect(ray.direction, n)), spheres, depth)));
         }
 
-        const reflRay = Ray.build(x, ray.direction.minus(n.scale(2.0 * Vec3.dot(n, ray.direction))));
         const into = Vec3.dot(n, nl) > 0.0;
         const nc = 1.0;
         const nt = 1.5;
@@ -211,22 +213,23 @@ const workerProgram = () => {
         const ddn = Vec3.dot(ray.direction, nl);
         const cos2t = 1.0 - nnt * nnt * (1.0 - ddn * ddn);
         if (cos2t < 0.0) {
-            return hit.emission.plus(f.times(radiance(reflRay, spheres, depth)));
+            return hit.emission.plus(f.times(radiance(Ray.build(x, Vec3.reflect(ray.direction, n)), spheres, depth)));
         }
 
-        const tdir = Vec3.normalize(ray.direction.scale(nnt).minus(n.scale((into ? 1.0 : -1.0) * (ddn * nnt + Math.sqrt(cos2t)))));
-        const a = nt - nc;
-        const b = nt + nc;
-        const R0 = a * a / (b * b);
-        const c = 1.0 - (into ? -ddn : Vec3.dot(tdir, n));
-        const Re = R0 + (1.0 - R0) * c * c * c * c * c;
+        const tdir = Vec3.refract(ray.direction, nl, nnt);
+        const R0 = Math.pow((nt - nc) / (nt + nc), 2);
+        const Re = R0 + (1.0 - R0) * Math.pow(1.0 - (into ? -ddn : Vec3.dot(tdir, n)), 5);
         const Tr = 1.0 - Re;
-        const P = 0.25 + 0.5 * Re;
         if (depth > 2) {
-            const v = Math.random() < P ? radiance(reflRay, spheres, depth).scale(Re / P) : radiance(Ray.build(x, tdir), spheres, depth).scale(Tr / (1.0 - P));
+            const P = 0.25 + 0.5 * Re;
+            const v = Math.random() < P ?
+                radiance(Ray.build(x, Vec3.reflect(ray.direction, n)), spheres, depth).scale(Re / P) :
+                radiance(Ray.build(x, tdir), spheres, depth).scale(Tr / (1.0 - P));
             return hit.emission.plus(f.times(v));
         }
-        return hit.emission.plus(f.times(radiance(reflRay, spheres, depth).scale(Re).plus(radiance(Ray.build(x, tdir), spheres, depth).scale(Tr))));
+        const reflRay = Ray.build(x, Vec3.reflect(ray.direction, n));
+        const rad = radiance(reflRay, spheres, depth).scale(Re).plus(radiance(Ray.build(x, tdir), spheres, depth).scale(Tr));
+        return hit.emission.plus(f.times(rad));
     }
 
     const spheres = [

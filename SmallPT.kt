@@ -18,7 +18,7 @@ class SmallPT {
         Sphere(600.0, Vec3(50.0, 681.33, 81.6), Vec3(12.0, 12.0, 12.0), Vec3.ZERO, ReflectanceType.DIFFUSE)
     )
 
-    private fun radiance(ray: Ray, dep: Int): Vec3 {
+    private fun intersect(ray: Ray): IntersectResult {
         var obj = Sphere.NO_HIT
         var nearest = Double.POSITIVE_INFINITY
         for (sphere in spheres) {
@@ -28,58 +28,65 @@ class SmallPT {
                 nearest = dist
             }
         }
-        if (obj == Sphere.NO_HIT) return Vec3.ZERO
+        return IntersectResult(obj, nearest)
+    }
 
-        var col = obj.color
-        val x = ray.origin + ray.direction * nearest
-        val n = Vec3.normalize(x - obj.position)
-        val a = Vec3.dot(n, ray.direction)
-        val nl = if (a < 0.0) n else -n
-        val depth = dep + 1
-        if (depth > 5) {
-            val p = max(col.x, max(col.y, col.z))
-            if (rnd() < p) col /= p else return obj.emission
-        }
-
-        return obj.emission + col * when (obj.type) {
-            ReflectanceType.DIFFUSE -> {
-                val r = rnd()
-                val phi = 2.0 * Math.PI * rnd()
-                val u = Vec3.normalize(if (abs(nl.x) > 0.1) Vec3(-nl.z, 0.0, nl.x) else Vec3(0.0, -nl.z, nl.y))
-                radiance(Ray(x, (u * cos(phi) + Vec3.cross(nl, u) * sin(phi)) * sqrt(r) + nl * sqrt(1.0 - r)), depth)
-            }
-            ReflectanceType.MIRROR -> radiance(Ray(x, Vec3.reflect(ray.direction, n)), depth)
+    private fun radiance(ray: Ray, depth: Int): Vec3 {
+        val (obj, nearest) = intersect(ray)
+        when (obj) {
+            Sphere.NO_HIT -> return Vec3.ZERO
             else -> {
-                val reflected = Ray(x, ray.direction - n * (2.0 * Vec3.dot(n, ray.direction)))
-                val into = Vec3.dot(n, nl) > 0.0
-                val nc = 1.0
-                val nt = 1.5
-                val nnt = if (into) nc / nt else nt / nc
-                val ddn = Vec3.dot(ray.direction, nl)
-                val cos2t = 1.0 - nnt * nnt * (1.0 - ddn * ddn)
-                return if (cos2t < 0.0) {
-                    obj.emission + col * radiance(reflected, depth)
-                } else {
-                    val tdir = Vec3.normalize(ray.direction * nnt - n * ((if (into) 1.0 else -1.0) * (ddn * nnt + sqrt(cos2t))))
-                    val r0 = (nt - nc).pow(2.0) / (nt + nc).pow(2.0)
-                    val c = 1.0 - if (into) -ddn else Vec3.dot(tdir, n)
-                    val re = r0 + (1.0 - r0) * c * c * c * c * c
-                    val tr = 1.0 - re
-                    val p = 0.25 + 0.5 * re
-                    if (depth > 2) {
-                        return obj.emission + col * if (Math.random() < p) {
-                            radiance(reflected, depth) * (re / p)
+                val x = ray.origin + ray.direction * nearest
+                val n = Vec3.normalize(x - obj.position)
+                val a = Vec3.dot(n, ray.direction)
+                val nl = if (a < 0.0) n else -n
+
+                var col = obj.color
+                if (depth > 4) {
+                    val p = max(col.x, max(col.y, col.z))
+                    if (depth < 256 && rnd() < p) col /= p else return obj.emission
+                }
+
+                return obj.emission + col * when (obj.type) {
+                    ReflectanceType.DIFFUSE -> {
+                        val r = rnd()
+                        val phi = 2.0 * Math.PI * rnd()
+                        val u = Vec3.normalize(if (abs(nl.x) > 0.1) Vec3(-nl.z, 0.0, nl.x) else Vec3(0.0, -nl.z, nl.y))
+                        radiance(Ray(x, (u * cos(phi) + Vec3.cross(nl, u) * sin(phi)) * sqrt(r) + nl * sqrt(1.0 - r)), depth + 1)
+                    }
+                    ReflectanceType.MIRROR -> radiance(Ray(x, Vec3.reflect(ray.direction, n)), depth + 1)
+                    else -> {
+                        val into = Vec3.dot(n, nl) > 0.0
+                        val nc = 1.0
+                        val nt = 1.5
+                        val nnt = if (into) nc / nt else nt / nc
+                        val ddn = Vec3.dot(ray.direction, nl)
+                        val cos2t = 1.0 - nnt * nnt * (1.0 - ddn * ddn)
+                        if (cos2t < 0.0) {
+                            radiance(Ray(x, Vec3.reflect(ray.direction, - n)), depth + 1)
                         } else {
-                            radiance(Ray(x, tdir), depth) * (tr / (1.0 - p))
+                            val refract = Vec3.refract(ray.direction, nl, nnt)
+                            val r0 = ((nt - nc) / (nt + nc)).pow(2)
+                            val re = r0 + (1.0 - r0) * (1.0 - if (into) -ddn else Vec3.dot(refract, n)).pow(5)
+                            val tr = 1.0 - re
+                            if (depth > 1) {
+                                val p = 0.25 + 0.5 * re
+                                if (Math.random() < p) {
+                                    radiance(Ray(x, Vec3.reflect(ray.direction, - n)), depth + 1) * (re / p)
+                                } else {
+                                    radiance(Ray(x, refract), depth + 1) * (tr / (1.0 - p))
+                                }
+                            } else {
+                                radiance(Ray(x, Vec3.reflect(ray.direction, - n)), depth + 1) * re + radiance(Ray(x, refract), depth + 1) * tr
+                            }
                         }
                     }
-                    obj.emission + col * (radiance(reflected, depth) * re + radiance(Ray(x, tdir), depth) * tr)
                 }
             }
         }
     }
 
-    fun run(samples: Int) {
+    private fun run(samples: Int) {
         val cam = Ray(Vec3(50.0, 52.0, 295.6), Vec3.normalize(Vec3(0.0, -0.042612, -1.0)))
         val cx = Vec3(WIDTH * 0.5135 / HEIGHT, 0.0, 0.0)
         val cy = Vec3.normalize(Vec3.cross(cx, cam.direction)).times(0.5135)
@@ -124,23 +131,16 @@ class SmallPT {
     }
 
     companion object {
-        const val WIDTH = 1024
-        const val HEIGHT = 768
+        private const val WIDTH = 1024
+        private const val HEIGHT = 768
 
-        @JvmStatic
-        fun main(args: Array<String>) {
-            val samples = if (args.isEmpty()) 1 else ceil(args[0].toInt() / 4.0).toInt()
-            SmallPT().run(samples)
-        }
+        private fun rnd() = ThreadLocalRandom.current().nextDouble()
+        private fun clamp(x: Double) = max(0.0, min(1.0, x))
+        private fun toInt(x: Double) = (clamp(x).pow(1.0 / 2.2) * 255.0 + 0.5).toInt()
 
-        fun rnd() = ThreadLocalRandom.current().nextDouble()
-        fun clamp(x: Double) = max(0.0, min(1.0, x))
-        fun toInt(x: Double) = (clamp(x).pow(1.0 / 2.2) * 255.0 + 0.5).toInt()
+        private enum class ReflectanceType { DIFFUSE, MIRROR, GLASS }
 
-        enum class ReflectanceType { DIFFUSE, MIRROR, GLASS }
-
-        data class Vec3(val x: Double, val y: Double, val z: Double) {
-
+        private data class Vec3(val x: Double, val y: Double, val z: Double) {
             operator fun unaryMinus() = Vec3(-x, -y, -z)
             operator fun plus(v: Vec3) = Vec3(x + v.x, y + v.y, z + v.z)
             operator fun minus(v: Vec3) = Vec3(x - v.x, y - v.y, z - v.z)
@@ -150,18 +150,20 @@ class SmallPT {
 
             companion object {
                 val ZERO = Vec3(0.0, 0.0, 0.0)
-
                 fun normalize(v: Vec3) = v / sqrt(dot(v, v))
                 fun dot(a: Vec3, b: Vec3) = a.x * b.x + a.y * b.y + a.z * b.z
                 fun cross(a: Vec3, b: Vec3) = Vec3(a.y * b.z - a.z * b.y, a.z * b.x - a.x * b.z, a.x * b.y - a.y * b.x)
                 fun reflect(v: Vec3, n: Vec3) = v - n * (2.0 * dot(v, n))
+                fun refract(i: Vec3, n: Vec3, eta: Double): Vec3 {
+                    val k = 1.0 - eta * eta * (1.0 - dot(n, i) * dot(n, i))
+                    return if (k < 0.0) ZERO else i * eta - n * (eta * dot(n, i) + sqrt(k))
+                }
             }
         }
 
-        data class Ray(val origin: Vec3, val direction: Vec3)
+        private data class Ray(val origin: Vec3, val direction: Vec3)
 
-        class Sphere(val radius: Double, val position: Vec3, val emission: Vec3, val color: Vec3, val type: ReflectanceType) {
-
+        private class Sphere(val radius: Double, val position: Vec3, val emission: Vec3, val color: Vec3, val type: ReflectanceType) {
             fun intersect(ray: Ray): Double {
                 val op = position - ray.origin
                 val b = Vec3.dot(op, ray.direction)
@@ -175,9 +177,16 @@ class SmallPT {
 
             companion object {
                 private const val EPSILON = 0.0001
-
                 val NO_HIT = Sphere(0.0, Vec3.ZERO, Vec3.ZERO, Vec3.ZERO, ReflectanceType.DIFFUSE)
             }
+        }
+
+        private data class IntersectResult(val obj: Sphere, val distance: Double)
+
+        @JvmStatic
+        fun main(args: Array<String>) {
+            val samples = if (args.isEmpty()) 1 else ceil(args[0].toInt() / 4.0).toInt()
+            SmallPT().run(samples)
         }
     }
 }

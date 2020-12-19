@@ -1,5 +1,5 @@
 #! /bin/sh
-spp=1024
+spp=5000
 format="Total: %E\nUser: %U\nKernel: %S\n\nCPU: %P\nMEM: %MK"
 
 echo "--------------------------------"
@@ -43,5 +43,5 @@ echo "--------------------------------"
 /usr/bin/time -f "$format" node smallpt.js $spp
 
 rm -rf target bin obj
-rm *.class
+rm *.class *.jar
 rm smallpt

@@ -1,5 +1,4 @@
 using System;
-using System.Collections.Concurrent;
 using System.IO;
 using System.Runtime.CompilerServices;
 using System.Threading;
@@ -59,6 +58,13 @@ namespace SmallPT
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         public static Vec3 Reflect(in Vec3 l, in Vec3 n) => l - n * 2.0 * Dot(l, n);
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        public static Vec3 Refract(Vec3 i, Vec3 n, double eta)
+        {
+            var k = 1.0 - eta * eta * (1.0 - Dot(n, i) * Dot(n, i));
+            return k < 0.0 ? Zero : i * eta - (n * (eta * Dot(n, i) + Sqrt(k)));
+        }
     }
 
     internal readonly struct Ray
@@ -148,59 +154,53 @@ namespace SmallPT
             var x = ray.Origin + ray.Direction * nearest;
             var n = Vec3.Normalize(x - obj.Position);
             var nl = Vec3.Dot(n, ray.Direction) < 0.0 ? n : -n;
-            var f = obj.Color;
+            
+            var color = obj.Color;
             if (++depth > 5)
             {
-                var maxComp = Max(f.X, Max(f.Y, f.Z));
-                if (Rnd() < maxComp) f /= maxComp;
-                else return obj.Emission;
+                var maxComp = Max(color.X, Max(color.Y, color.Z));
+                if (depth < 256 && Rnd() < maxComp) color /= maxComp; else return obj.Emission;
             }
 
-            switch (obj.Type)
+            if (obj.Type == ReflectanceType.Diffuse)
             {
-                case ReflectanceType.Diffuse:
-                {
-                    var r = Rnd();
-                    var phi = 2.0 * PI * Rnd();
-                    var u = Vec3.Normalize(Abs(nl.X) > 0.1 ? new Vec3(-nl.Z, 0.0, nl.X) : new Vec3(0.0, -nl.Z, nl.Y));
-                    var nr = new Ray(x, (u * Cos(phi) + Vec3.Cross(nl, u) * Sin(phi)) * Sqrt(r) + nl * Sqrt(1.0 - r));
-                    return obj.Emission + f * Radiance(nr, depth);
-                }
-                case ReflectanceType.Mirror:
-                {
-                    return obj.Emission + f * Radiance(new Ray(x, Vec3.Reflect(ray.Direction, n)), depth);
-                }
-                default:
-                {
-                    var reflected = new Ray(x, ray.Direction - n * (2.0 * Vec3.Dot(n, ray.Direction)));
-                    var into = Vec3.Dot(n, nl) > 0.0;
-                    const double nc = 1.0;
-                    const double nt = 1.5;
-                    var nnt = into ? nc / nt : nt / nc;
-                    var ddn = Vec3.Dot(ray.Direction, nl);
-                    var cos2T = 1.0 - nnt * nnt * (1.0 - ddn * ddn);
-                    if (cos2T < 0.0) return obj.Emission + f * Radiance(reflected, depth);
-
-                    var tDir = Vec3.Normalize(ray.Direction * nnt - n * ((into ? 1.0 : -1.0) * (ddn * nnt + Sqrt(cos2T))));
-                    var r0 = Pow(nt - nc, 2.0) / Pow(nt + nc, 2.0);
-                    var c = 1.0 - (into ? -ddn : Vec3.Dot(tDir, n));
-                    var re = r0 + (1.0 - r0) * c * c * c * c * c;
-                    var tr = 1.0 - re;
-                    if (depth > 2)
-                    {
-                        var p = 0.25 + 0.5 * re;
-                        if (Rnd() < p)
-                        {
-                            return obj.Emission + f * Radiance(reflected, depth) * (re / p);
-                        }
-
-                        return obj.Emission + f * Radiance(new Ray(x, tDir), depth) * (tr / (1.0 - p));
-                    }
-
-                    var rad = Radiance(reflected, depth) * re + Radiance(new Ray(x, tDir), depth) * tr;
-                    return obj.Emission + f * rad;
-                }
+                var r = Rnd();
+                var phi = 2.0 * PI * Rnd();
+                var u = Vec3.Normalize(Abs(nl.X) > 0.1 ? new Vec3(-nl.Z, 0.0, nl.X) : new Vec3(0.0, -nl.Z, nl.Y));
+                var nr = new Ray(x, (u * Cos(phi) + Vec3.Cross(nl, u) * Sin(phi)) * Sqrt(r) + nl * Sqrt(1.0 - r));
+                return obj.Emission + color * Radiance(nr, depth);
             }
+
+            if (obj.Type == ReflectanceType.Mirror)
+            {
+                return obj.Emission + color * Radiance(new Ray(x, Vec3.Reflect(ray.Direction, n)), depth);
+            }
+
+            var into = Vec3.Dot(n, nl) > 0.0;
+            const double nc = 1.0;
+            const double nt = 1.5;
+            var nnt = into ? nc / nt : nt / nc;
+            var ddn = Vec3.Dot(ray.Direction, nl);
+            var cos2T = 1.0 - nnt * nnt * (1.0 - ddn * ddn);
+            if (cos2T < 0.0)
+            {
+                return obj.Emission + color * Radiance(new Ray(x, Vec3.Reflect(ray.Direction, n)), depth);
+            }
+
+            var tDir = Vec3.Refract(ray.Direction, nl, nnt);
+            var r0 = Pow((nt - nc) / (nt + nc), 2);
+            var re = r0 + (1.0 - r0) * Pow(1.0 - (into ? -ddn : Vec3.Dot(tDir, n)), 5);
+            var tr = 1.0 - re;
+            if (depth > 2)
+            {
+                var p = 0.25 + 0.5 * re;
+                return Rnd() < p
+                    ? obj.Emission + color * Radiance(new Ray(x, Vec3.Reflect(ray.Direction, n)), depth) * (re / p)
+                    : obj.Emission + color * Radiance(new Ray(x, tDir), depth) * (tr / (1.0 - p));
+            }
+
+            return obj.Emission + color * (Radiance(new Ray(x, Vec3.Reflect(ray.Direction, n)), depth) * re +
+                                           Radiance(new Ray(x, tDir), depth) * tr);
         }
 
         [MethodImpl(MethodImplOptions.AggressiveInlining | MethodImplOptions.AggressiveOptimization)]
