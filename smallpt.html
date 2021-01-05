@@ -2,191 +2,179 @@
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <title>SmallPT</title>
+    <title>SmallPT - WebGL</title>
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <link crossorigin="anonymous" href="https://cdn.jsdelivr.net/npm/bootstrap@4.5.3/dist/css/bootstrap.min.css"
           integrity="sha384-TX8t27EcRE3e/ihU7zmQxVncDAy5uIKz4rEkgIXeMed4M0jlfIDPvg6uqKI2xXr2" rel="stylesheet">
-    <style>
-        html {
-            height: 100%;
-        }
-        body {
-            color: #eee;
-            background-color: #123;
-            overflow: hidden;
-        }
-    </style>
+    <style>html { height: 100%; } body { color: #eee; background-color: #123; overflow: hidden; } </style>
 </head>
+
 <body class="h-100">
 <div class="h-100 d-flex flex-column justify-content-center align-items-center">
     <div class="py-2"><span>Ready</span></div>
-    <div><canvas width="1024" height="768"></canvas></div>
-    <div class="py-2"><button type="button" class="btn btn-danger">Render</button></div>
+    <div>
+        <canvas width="1024" height="768"></canvas>
+    </div>
+    <div class="py-2">
+        <button type="button" class="btn btn-danger">Render</button>
+    </div>
 </div>
 
 <script id="vs" type="x-shader/x-vertex">#version 300 es
-in vec2 position;
-out vec2 fragCoord;
-
+in vec2 aPosition;
 void main() {
-  fragCoord = position;
-  gl_Position = vec4(position.x, position.y, 0.0, 1.0);
+    gl_Position = vec4(aPosition.xy, 0.0, 1.0);
 }
 </script>
 
 <script id="fs" type="x-shader/x-fragment">#version 300 es
+#ifdef GL_FRAGMENT_PRECISION_HIGH
 precision highp float;
+#else
+precision mediump float;
+#endif
 
-struct Ray { vec3 origin;vec3 direction; };
-struct Sphere { float radius;vec3 position;vec3 color;vec3 emission;int type; };
+struct Ray { vec3 origin; vec3 direction; };
+struct Sphere { float radius; vec3 position; vec3 color; vec3 emission; int type; };
 
-const int SAMPLES = 1250;
-const int MAX_DEPTH = 5;
-const float SHADOW_EPSILON = 0.02;
-const float PI = radians(180.0);
 const int MAT_DIFFUSE = 0;
 const int MAT_MIRROR = 1;
 const int MAT_GLASS = 2;
 
+const float HUGE = 1E20;
+const int SAMPLES = 1025;
+const int MAX_DEPTH = 5;
+const float SHADOW_EPSILON = 0.003;
+const float PI = radians(180.0);
+
+uniform float uRandom;
+out vec4 fragColor;
+
 float seed = 0.0;
+
 float rand() {
-  uint x = floatBitsToUint(seed += 0.0000033331687);
-  x += x << 10u;
-  x ^= x >> 6u;
-  x += x << 3u;
-  x ^= x >> 11u;
-  x += x << 15u;
-  return uintBitsToFloat((x & 0x007FFFFFu) | 0x3F800000u) - 1.0;
+    uint x = floatBitsToUint(seed += PI * 0.00001);
+    x += x << 10u;
+    x ^= x >> 6u;
+    x += x << 3u;
+    x ^= x >> 11u;
+    x += x << 15u;
+    return uintBitsToFloat((x & 0x007FFFFFu) | 0x3F800000u) - 1.0;
 }
 
 const Sphere[] scene = Sphere[](
-  Sphere(10000.0, vec3(0.0, 12.0, 10025.0), vec3(0.8, 0.8, 0.8), vec3(0.0), MAT_DIFFUSE),
-  Sphere(10000.0, vec3(0.0, 12.0, -10075.0), vec3(0.0, 0.0, 0.0), vec3(0.0), MAT_DIFFUSE),
-  Sphere(10000.0, vec3(-10015.0, 0.0, 0.0), vec3(0.8, 0.3, 0.3), vec3(0.0), MAT_DIFFUSE),
-  Sphere(10000.0, vec3( 10015.0, 0.0, 0.0), vec3(0.3, 0.3, 0.8), vec3(0.0), MAT_DIFFUSE),
-  Sphere(10000.0, vec3(0.0, 10024.0, 0.0), vec3(0.8, 0.8, 0.8), vec3(0.0), MAT_DIFFUSE),
-  Sphere(10000.0, vec3(0.0, -10000.0, 0.0), vec3(0.8, 0.8, 0.8), vec3(0.0), MAT_DIFFUSE),
-  Sphere(5.0,   vec3(-7.5, 5.1, 13.0),   vec3(0.8, 0.8, 0.8), vec3(0.0), MAT_MIRROR),
-  Sphere(5.0,   vec3( 7.5, 5.1, 3.0),   vec3(0.7, 0.9, 0.9), vec3(0.0), MAT_GLASS),
-  Sphere(100.0,  vec3(0.0, 123.85, 0.0),  vec3(0.0, 0.0, 0.0), vec3(32.0), MAT_DIFFUSE),
-  Sphere(200.0,  vec3(0.0, 223.95, 0.0),  vec3(0.0, 0.0, 0.0), vec3(0.0), MAT_DIFFUSE)
+    Sphere(10000.0, vec3(0.0, 12.0, 10025.0), vec3(0.8, 0.8, 0.8), vec3(0.0), MAT_DIFFUSE),
+    Sphere(10000.0, vec3(0.0, 12.0, -10075.0), vec3(0.0, 0.0, 0.0), vec3(0.0), MAT_DIFFUSE),
+    Sphere(10000.0, vec3(-10015.0, 0.0, 0.0), vec3(0.8, 0.3, 0.3), vec3(0.0), MAT_DIFFUSE),
+    Sphere(10000.0, vec3(10015.0, 0.0, 0.0), vec3(0.3, 0.3, 0.8), vec3(0.0), MAT_DIFFUSE),
+    Sphere(10000.0, vec3(0.0, 10024.0, 0.0), vec3(0.8, 0.8, 0.8), vec3(0.0), MAT_DIFFUSE),
+    Sphere(10000.0, vec3(0.0, -10000.0, 0.0), vec3(0.8, 0.8, 0.8), vec3(0.0), MAT_DIFFUSE),
+    Sphere(5.0, vec3(-7.5, 5.1, 13.0), vec3(0.8, 0.8, 0.8), vec3(0.0), MAT_MIRROR),
+    Sphere(5.0, vec3(7.5, 5.1, 3.0), vec3(0.7, 0.9, 0.9), vec3(0.0), MAT_GLASS),
+    Sphere(100.0, vec3(0.0, 123.85, 0.0), vec3(0.0, 0.0, 0.0), vec3(32.0), MAT_DIFFUSE),
+    Sphere(200.0, vec3(0.0, 223.95, 0.0), vec3(0.0, 0.0, 0.0), vec3(0.0), MAT_DIFFUSE)
 );
 
-float intersect(in Ray ray, in Sphere sphere) {
-  vec3 op = sphere.position - ray.origin;
-  float b = dot(op, ray.direction);
-  float det = b * b - dot(op, op) + sphere.radius * sphere.radius;
-  if (det < 0.0) return 0.0;
-  det = sqrt(det);
-  float t;
-  return (t = b - det) > SHADOW_EPSILON ? t : ((t = b + det) > SHADOW_EPSILON ? t : 0.0);
-}
-
-int intersect(in Ray ray, out float t) {
-  t = 1E10;
-  int id = -1;
-  for (int i = 0; i < scene.length(); ++i) {
-    float dist = intersect(ray, scene[i]);
-    if (dist > 0.0 && dist < t) {
-      t = dist;
-      id = i;
-    }
-  }
-  return id;
-}
-
-vec3 render(in Ray ray) {
-  vec3 acc = vec3(0.0);
-  vec3 att = vec3(1.0);
-
-  for (int depth = 0; depth < MAX_DEPTH; ++depth) {
-    int id;
+float intersect(Ray ray, Sphere sphere) {
+    vec3 op = sphere.position - ray.origin;
+    float b = dot(op, ray.direction);
+    float det = b * b - dot(op, op) + sphere.radius * sphere.radius;
+    if (det < 0.0) return 0.0;
+    det = sqrt(det);
     float t;
-    if ((id = intersect(ray, t)) == -1) break;
-
-    Sphere obj = scene[id];
-
-    vec3 x = ray.origin + ray.direction * t;
-    vec3 n = normalize(x - obj.position);
-    vec3 nl = dot(n, ray.direction) < 0.0 ? n : -n;
-
-    acc += att * obj.emission;
-
-    if (obj.type == MAT_DIFFUSE) {
-      float r = rand();
-      float phi = 2.0 * PI * rand();
-      vec3 u = normalize(cross(nl.yzx, nl));
-      ray = Ray(x, (u * cos(phi) + cross(nl, u) * sin(phi)) * sqrt(r) + nl * sqrt(1.0 - r));
-      att *= obj.color * dot(nl, ray.direction);
-    }
-    else if (obj.type == MAT_MIRROR) {
-      att *= obj.color;
-      ray = Ray(x, reflect(ray.direction, nl));
-    }
-    else {
-      float cosT = dot(ray.direction, n);
-      ray = Ray(x, reflect(ray.direction, nl));
-      float eta = mix(1.5 / 1.0, 1.0 / 1.5, float(cosT < 0.0));
-      vec3 refracted = refract(ray.direction, nl, eta);
-      if (length(refracted) > 0.0) {
-        float r0 = pow((1.5 - 1.0) / (1.0 + 1.5), 2.0);
-        if (rand() > r0 + (1.0 - r0) * pow(1.0 - mix(dot(refracted, n), -cosT, float(cosT < 0.0)), 5.0)) {
-          att *= obj.color;
-          ray = Ray(x, refracted);
-        }
-      }
-    }
-  }
-
-  return acc;
+    return (t = b - det) > SHADOW_EPSILON ? t : ((t = b + det) > SHADOW_EPSILON ? t : 0.0);
 }
 
-in vec2 fragCoord;
-out vec4 fragColor;
-uniform float iTime;
+int intersect(Ray ray, out float t) {
+    t = HUGE;
+    int id = -1;
+    for (int i = 0; i < scene.length(); ++i) {
+        float dist = intersect(ray, scene[i]);
+        if (dist > 0.0 && dist < t) {
+            t = dist;
+            id = i;
+        }
+    }
+    return id;
+}
+
+vec3 render(Ray ray) {
+    vec3 acc = vec3(0.0);
+    vec3 att = vec3(1.0);
+
+    for (int depth = 0; depth < MAX_DEPTH; ++depth) {
+        int id;
+        float t;
+        if ((id = intersect(ray, t)) == -1) break;
+
+        Sphere obj = scene[id];
+
+        vec3 x = ray.origin + ray.direction * t;
+        vec3 n = normalize(x - obj.position);
+        vec3 nl = dot(n, ray.direction) < 0.0 ? n : -n;
+
+        acc += att * obj.emission;
+
+        if (obj.type == MAT_DIFFUSE) {
+            float r0 = rand();
+            float r1 = rand() * PI * 2.0;
+            vec3 u = normalize(cross(nl.yzx, nl));
+            ray = Ray(x, (u * cos(r1) + cross(nl, u) * sin(r1)) * sqrt(r0) + nl * sqrt(1.0 - r0));
+            att *= obj.color * dot(nl, ray.direction);
+        } else if (obj.type == MAT_MIRROR) {
+            att *= obj.color;
+            ray = Ray(x, reflect(ray.direction, nl));
+        } else {
+            float cosT = dot(ray.direction, n);
+            ray = Ray(x, reflect(ray.direction, nl));
+            float eta = mix(1.5, 1.0 / 1.5, float(cosT < 0.0));
+            vec3 refracted = refract(ray.direction, nl, eta);
+            if (length(refracted) > 0.0) {
+                float r0 = pow((1.5 - 1.0) / (1.0 + 1.5), 2.0);
+                if (rand() > r0 + (1.0 - r0) * pow(1.0 - mix(dot(refracted, n), -cosT, float(cosT < 0.0)), 5.0)) {
+                    att *= obj.color;
+                    ray = Ray(x, refracted);
+                }
+            }
+        }
+    }
+
+    return acc;
+}
 
 void main() {
-  vec2 resolution = vec2(1024.0, 768.0);
-  vec2 aspectRatio = vec2(resolution.x / resolution.y, 1.0);
-  vec2 screenXY = (vec2(0.5) + fragCoord * 0.5) * resolution;
-  seed = iTime + fragCoord.x / resolution.x + fragCoord.y / resolution.y;
+    vec2 resolution = vec2(1024.0, 768.0);
+    vec2 aspectRatio = vec2(resolution.x / resolution.y, 1.0);
+    seed = uRandom + 1.0 / gl_FragCoord.x + 1.0 / gl_FragCoord.y;
 
-  vec3 cameraPos = vec3(0.0, 12.0, -70.0);
-  vec3 cameraLookAt = vec3(0.0, 12.0, 0.0);
+    vec3 cameraPos = vec3(0.0, 12.0, -70.0);
+    vec3 cameraLookAt = vec3(0.0, 12.0, 0.0);
 
-  vec3 cz = normalize(cameraLookAt - cameraPos);
-  vec3 cx = normalize(cross(vec3(0.0, 1.0, 0.0), cz));
-  vec3 cy = cross(cz, cx);
-  mat3 cameraTransform = mat3(cx, cy, cz);
+    vec3 cz = normalize(cameraLookAt - cameraPos);
+    vec3 cx = normalize(cross(vec3(0.0, 1.0, 0.0), cz));
+    vec3 cy = cross(cz, cx);
+    mat3 cameraTransform = mat3(cx, cy, cz);
 
-  vec3 acc = vec3(0.0);
-  for (int sy = -1; sy < 1; ++sy) {
-    for (int sx = -1; sx < 1; ++sx) {
-      vec3 samples = vec3(0.0);
-      for (int s = 0; s < SAMPLES; ++s) {
-        vec2 r = sqrt(2.0 * vec2(rand(), rand())) - vec2(1.0) + vec2(float(sx), float(sy));
-        r = r * 0.5 + screenXY;
-        r = r / resolution - vec2(0.5);
-        vec3 cameraDir = normalize(cameraTransform * vec3(r * aspectRatio, 2.25));
-        samples += render(Ray(cameraPos, cameraDir));
-      }
-      acc += pow(clamp(samples / float(SAMPLES), vec3(0.0), vec3(1.0)), vec3(1.0 / 2.2));
+    vec3 acc = vec3(0.0);
+    for (int sy = -1; sy < 1; ++sy) {
+        for (int sx = -1; sx < 1; ++sx) {
+            vec3 samples = vec3(0.0);
+            for (int s = 0; s < SAMPLES; ++s) {
+                vec2 r = sqrt(2.0 * vec2(rand(), rand())) - vec2(1.0) + vec2(float(sx), float(sy));
+                r = r * 0.5 + gl_FragCoord.xy;
+                r = r / resolution - vec2(0.5);
+                vec3 cameraDir = normalize(cameraTransform * vec3(r * aspectRatio, 2.25));
+                samples += render(Ray(cameraPos, cameraDir));
+            }
+            acc += clamp(samples / float(SAMPLES), vec3(0.0), vec3(1.0));
+        }
     }
-  }
 
-  fragColor = vec4(acc / 4.0, 1.0);
+    fragColor = vec4(pow(acc * 0.25, vec3(1.0 / 2.2)), 1.0);
 }
 </script>
 
 <script>
-    function sizeToPixelRatio(canvas) {
-        const pixelRatio = 1.0 / (window.devicePixelRatio || 1.0);
-        const rect = canvas.getBoundingClientRect();
-        canvas.style.width = (rect.right - rect.left) * pixelRatio + "px";
-        canvas.style.height = (rect.bottom - rect.top) * pixelRatio + "px";
-        return canvas;
-    }
-
     function compileShader(gl, shaderSource, shaderType) {
         const shader = gl.createShader(shaderType);
         gl.shaderSource(shader, shaderSource);
@@ -209,68 +197,55 @@ void main() {
         return program;
     }
 
-    function createBuffer(data) {
-        const buffer = gl.createBuffer();
-        gl.bindBuffer(gl.ARRAY_BUFFER, buffer);
-        gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(data), gl.STATIC_DRAW);
-        gl.bindBuffer(gl.ARRAY_BUFFER, null);
-        return buffer;
-    }
-
-    function displayInfo(query) {
-        if (ext != null) {
-            document.querySelector("span").innerText = "Awaiting results...";
-
-            let attempts = 0;
-            const timerId = setInterval(() => {
-                const available = gl.getQueryParameter(query, gl.QUERY_RESULT_AVAILABLE);
-                const disjoint = gl.getParameter(ext.GPU_DISJOINT_EXT);
-                if (available && !disjoint) {
-                    const nanos = gl.getQueryParameter(query, gl.QUERY_RESULT);
-                    document.querySelector("span").innerText = `Elapsed: ${(nanos / 1000000000.0).toFixed(2)} second(s)`;
-                    clearInterval(timerId);
-                } else {
-                    document.querySelector("span").innerText = "Awaiting results...";
-                }
-                if (++attempts > 16) {
-                    clearInterval(timerId)
-                }
-            }, 1000);
-        } else {
-            document.querySelector("span").innerText = "WebGL timer query extension not available!"
-        }
-    }
-
-    const canvas = sizeToPixelRatio(document.querySelector("canvas"));
-    const gl = canvas.getContext("webgl2", { alpha: false, stencil: false, depth: false });
-    const ext = gl.getExtension('EXT_disjoint_timer_query_webgl2');
+    const canvas = document.querySelector("canvas");
+    const gl = canvas.getContext("webgl2", { alpha: false, stencil: false, depth: false, preserveDrawingBuffer: true });
     const vertexShader = compileShader(gl, document.getElementById("vs").text, gl.VERTEX_SHADER);
     const fragmentShader = compileShader(gl, document.getElementById("fs").text, gl.FRAGMENT_SHADER);
     const program = compileProgram(gl, vertexShader, fragmentShader);
     gl.useProgram(program);
 
-    const buffer = createBuffer([-1.0, -1.0, -1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, -1.0, -1.0, -1.0]);
-    gl.bindBuffer(gl.ARRAY_BUFFER, buffer);
+    const uRandom = gl.getUniformLocation(program, 'uRandom');
 
-    const position = gl.getAttribLocation(program, 'position');
-    const time = gl.getUniformLocation(program, 'iTime');
-    gl.enableVertexAttribArray(position);
-    gl.vertexAttribPointer(position, 2, gl.FLOAT, gl.FALSE, 0, 0);
-    gl.clearColor(0.0, 0.0, 0.0, 1.0);
-    gl.clear(gl.COLOR_BUFFER_BIT);
+    let currentTile = 0, tiles = [];
+    const tileSize = 8, dt = 2 / tileSize;
+    for (let y = -1; y < 1; y += dt) {
+        const ty = y + dt;
+        for (let x = -1; x < 1; x += dt) {
+            const tx = x + dt;
+            tiles = [...tiles, x, y, x, ty, tx, ty, tx, ty, tx, y, x, y];
+        }
+    }
+
+    const buffer = gl.createBuffer();
+    gl.bindBuffer(gl.ARRAY_BUFFER, buffer);
+    gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(tiles), gl.DYNAMIC_DRAW);
+    gl.enableVertexAttribArray(0);
+    gl.bindAttribLocation(program, 0, 'aPosition');
+    gl.vertexAttribPointer(0, 2, gl.FLOAT, gl.FALSE, 0, 0);
+
+    let startMillis = 0;
+    function renderTile() {
+        if (currentTile === 0) startMillis = performance.now();
+
+        gl.uniform1f(uRandom, Math.random());
+        gl.drawArrays(gl.TRIANGLES, currentTile * 6, 6);
+
+        if (++currentTile < tiles.length / 12) {
+            window.requestAnimationFrame(renderTile);
+        } else {
+            const duration = performance.now() - startMillis;
+            document.querySelector("span").innerText = `Elapsed: ${(duration / 1000.0).toFixed(2)} second(s)`;
+            document.querySelector("button").disabled = false;
+        }
+    }
 
     document.querySelector("button").addEventListener("click", (e) => {
         document.querySelector("span").innerText = "Rendering...";
         e.target.disabled = true;
-        setTimeout(() => {
-            gl.uniform1f(time, performance.now() / 1000000000.0);
-            const query = gl.createQuery();
-            ext && gl.beginQuery(ext.TIME_ELAPSED_EXT, query);
-            gl.drawArrays(gl.TRIANGLES, 0, 6);
-            ext && gl.endQuery(ext.TIME_ELAPSED_EXT);
-            displayInfo(query);
-            e.target.disabled = false;
-        }, 500);
+        currentTile = startMillis = 0;
+        gl.clearColor(0, 0, 0, 1);
+        gl.clear(gl.COLOR_BUFFER_BIT);
+        window.requestAnimationFrame(renderTile);
     });
 </script>
 </body>
